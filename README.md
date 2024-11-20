@@ -130,7 +130,7 @@ The value of these parameters has been tweaked between version 0.9.2 (live on th
 | `PHIHASH_CACHE_BYTES` | `16x1024` | `16x1024` | `16x1024` |
 | `PHIHASH_CNT_DAG`     | `64`  | `64`  | `64`  |
 | `PHIHASH_CNT_CACHE`   | `12`  | `11`  | `11`  |
-| `PHIHASH_CNT_MATH`    | `20`  | `18`  | `18`  |
+| `PHIHASH_CNT_MATH`    | `20`  | `18`  | `22`  |
 
 PHIHASH_EPOCH_LENGTH = 7500
 
