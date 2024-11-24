@@ -711,6 +711,16 @@ bool CLMiner::initDevice()
               << m_settings.globalWorkSize / m_settings.localWorkSize;
     }
 
+#ifndef __clang__
+        // Nvidia
+        if (!m_deviceDescriptor.clNvCompute.empty())
+        {
+            m_computeCapability =
+                m_deviceDescriptor.clNvComputeMajor * 10 + m_deviceDescriptor.clNvComputeMinor;
+            int maxregs = m_computeCapability >= 35 ? 72 : 63;
+            sprintf(m_options, "-cl-nv-maxrregcount=%d", maxregs);
+        }
+#endif
 
     return true;
 
@@ -742,18 +752,6 @@ bool CLMiner::initEpoch_internal()
     try
     {
         char options[256] = {0};
-#ifndef __clang__
-
-        // Nvidia
-        if (!m_deviceDescriptor.clNvCompute.empty())
-        {
-            m_computeCapability =
-                m_deviceDescriptor.clNvComputeMajor * 10 + m_deviceDescriptor.clNvComputeMinor;
-            int maxregs = m_computeCapability >= 35 ? 72 : 63;
-            sprintf(m_options, "-cl-nv-maxrregcount=%d", maxregs);
-        }
-
-#endif
 
         m_dagItems = m_epochContext.dagNumItems;
 

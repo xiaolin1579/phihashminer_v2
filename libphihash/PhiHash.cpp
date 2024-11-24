@@ -1,6 +1,7 @@
 #include "PhiHash.h"
 #include <limits>
 #include <sstream>
+#include <regex>
 #define pcg_rnd() (pcg32(pcg_rnd_state))
 // #define pcg_rnd() (kiss99(rnd_state))
 // #define pcg_rnd() (pcg32(pcg_rnd_state))
@@ -31,6 +32,8 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     int mix_seq_cache[PHIHASH_REGS];
     int mix_seq_dst_cnt = 0;
     int mix_seq_cache_cnt = 0;
+
+    bool _IS_CUDA=true;
     for (int i = 0; i < PHIHASH_REGS; i++)
     {
         mix_seq_dst[i] = i;
@@ -69,7 +72,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "#endif\n\n";
 
         ret << "\n";
-        #define _IS_CUDA true;
+
     }
     else
     {
@@ -125,6 +128,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     // See https://github.com/gangnamtestnet/phihashminer/issues/16
     if (kern == KERNEL_CL)
     {
+        _IS_CUDA=false;
         ret << "uint32_t mix[PHIHASH_REGS];\n";
         ret << "for(int i=0; i<PHIHASH_REGS; i++)\n";
         ret << "    mix[i] = mix_arg[i];\n";
@@ -189,7 +193,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
             std::string dest = mix_dst();
             uint32_t r2 = pcg_rnd();
             ret << "// random math " << i << "\n";
-            ret << math("data", src1_str, src2_str, r1);
+            ret << math("data", src1_str, src2_str, r1,_IS_CUDA);
             ret << merge(dest, "data", r2);
         }
     }
@@ -241,7 +245,7 @@ std::string PhiHash::merge(std::string a, std::string b, uint32_t r)
 }
 
 // Random math between two input values
-std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t r)
+std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t r, bool _IS_CUDA)
 {
     std::ostringstream ret;
     // printf("%d\n", r % 11);  
@@ -267,7 +271,7 @@ std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t 
     } else if (op_index < 7) {
         ret << d << " = " << operations[op_index] << a << ", " << b << " & 31);\n";
     } else if (op_index == 10) {  
-        #ifdef _IS_CUDA  
+        if (_IS_CUDA){
             ret << d << " = [&]() { "
                 << "constexpr float PHI = 0.61803398875f; "
                 << "float sum = static_cast<float>(" << a << ") + static_cast<float>(" << b << "); "
@@ -275,15 +279,17 @@ std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t 
                 << "float frac_part = result - floor(result); "
                 << "return static_cast<uint32_t>(frac_part * (1ULL << 32)); "
                 << "}();\n";
-        #else
-            ret << d << " = [&]() { "
-                << "constexpr float PHI = 0.61803398875f; "
-                << "float sum = static_cast<float>(" << a << ") + static_cast<float>(" << b << "); "
+        }else{
+            ret << d << " = "
+                << "({ "
+                << "const float PHI = 0.61803398875f; "
+                << "float sum = (float)(" << a << ") + (float)(" << b << "); "
                 << "float result = tanh(sum * PHI); "
                 << "float frac_part = result - floor(result); "
-                << "return static_cast<uint32_t>(frac_part * (1ULL << 32)); "
-                << "}();\n";
-        #endif
+                << "(unsigned int)(frac_part * (1u << 32)); "
+                << "});\n";
+
+        }
     } else {
         ret << d << " = " << a << operations[op_index] << b << ";\n";
     }
@@ -308,4 +314,28 @@ uint32_t PhiHash::pcg32(pcg32_t &st)
     // return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
 
     return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
+}
+void PhiHash::calculate_fast_mod_data(uint32_t divisor, uint32_t& reciprocal, uint32_t& increment, uint32_t& shift)
+{
+    if ((divisor & (divisor - 1)) == 0) {
+        reciprocal = 1;
+        increment = 0;
+        shift = 31U - clz(divisor);
+    }
+    else {
+        shift = 63U - clz(divisor);
+        const uint64_t N = 1ULL << shift;
+        const uint64_t q = N / divisor;
+        const uint64_t r = N - q * divisor;
+        if (r * 2 < divisor)
+        {
+            reciprocal = static_cast<uint32_t>(q);
+            increment = 1;
+        }
+        else
+        {
+            reciprocal = static_cast<uint32_t>(q + 1);
+            increment = 0;
+        }
+    }
 }
