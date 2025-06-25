@@ -6,6 +6,6 @@ hunter_config(Boost VERSION 1.72.0-p1)
 #     SHA1 85aa6c856402c985922fa3ac026838b11e3e05b9
 # )
 hunter_config(ethash VERSION 0.1.14
-    URL http://127.0.0.1:8081/cpp-phihash-master-v2.tar.gz
-    SHA1 991df138f082e0d3383afc41d3eeab11a8e3ef5b
+    URL https://github.com/PhicoinProject/cpp-phihash-master-v2/archive/refs/tags/2.0.2.tar.gz
+    SHA1 63d9e191d6bfaa31d4cab658a14bdfb064a10786
 )
