@@ -173,7 +173,7 @@ __device__ __forceinline__ void fill_mix(uint32_t* hash_seed, uint32_t lane_id, 
 }
 
 __global__ void 
-progpow_search(
+phihash_search(
     uint64_t start_nonce,
     const hash32_t header,
     const uint64_t target,

@@ -100,7 +100,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "typedef struct __align__(16) {uint32_t s[PHIHASH_DAG_LOADS];} dag_t;\n";
         ret << "\n";
         ret << "// Inner loop for phi_seed " << phi_seed << "\n";
-        ret << "__device__ __forceinline__ void progPowLoop(const uint32_t loop,\n";
+        ret << "__device__ __forceinline__ void PhihashLoop(const uint32_t loop,\n";
         ret << "        uint32_t mix[PHIHASH_REGS],\n";
         ret << "        const dag_t *g_dag,\n";
         ret << "        const uint32_t c_dag[PHIHASH_CACHE_WORDS],\n";
@@ -111,7 +111,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "typedef struct __attribute__ ((aligned (16))) {uint32_t s[PHIHASH_DAG_LOADS];} dag_t;\n";
         ret << "\n";
         ret << "// Inner loop for phi_seed " << phi_seed << "\n";
-        ret << "inline void progPowLoop(const uint32_t loop,\n";
+        ret << "inline void PhihashLoop(const uint32_t loop,\n";
         ret << "        volatile uint32_t mix_arg[PHIHASH_REGS],\n";
         ret << "        __global const dag_t *g_dag,\n";
         ret << "        __local const uint32_t c_dag[PHIHASH_CACHE_WORDS],\n";
