@@ -1,11 +1,9 @@
 #include "PhiHash.h"
 #include <limits>
 #include <sstream>
-#include <regex>
-#define pcg_rnd() (pcg32(pcg_rnd_state))
-// #define pcg_rnd() (kiss99(rnd_state))
-// #define pcg_rnd() (pcg32(pcg_rnd_state))
-#define mix_src()   ("mix[" + std::to_string(pcg_rnd() % PHIHASH_REGS) + "]")
+
+#define rnd() (kiss99(rnd_state))
+#define mix_src()   ("mix[" + std::to_string(rnd() % PHIHASH_REGS) + "]")
 #define mix_dst()   ("mix[" + std::to_string(mix_seq_dst[(mix_seq_dst_cnt++)%PHIHASH_REGS]) + "]")
 #define mix_cache() ("mix[" + std::to_string(mix_seq_cache[(mix_seq_cache_cnt++)%PHIHASH_REGS]) + "]")
 
@@ -23,17 +21,19 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     uint32_t seed0 = (uint32_t)phi_seed;
     uint32_t seed1 = phi_seed >> 32;
     uint32_t fnv_hash = 0x811c9dc5;
+    kiss99_t rnd_state;
+    rnd_state.z = fnv1a(fnv_hash, seed0);
+    rnd_state.w = fnv1a(fnv_hash, seed1);
+    rnd_state.jsr = fnv1a(fnv_hash, seed0);
+    rnd_state.jcong = fnv1a(fnv_hash, seed1);
 
-    pcg32_t pcg_rnd_state;
-    pcg_rnd_state.state = fnv1a(fnv_hash, seed0);
-    pcg_rnd_state.inc = fnv1a(fnv_hash, seed1) | 1;  
-
+    // Create a random sequence of mix destinations and cache sources
+    // Merge is a read-modify-write, guaranteeing every mix element is modified every loop
+    // Guarantee no cache load is duplicated and can be optimized away
     int mix_seq_dst[PHIHASH_REGS];
     int mix_seq_cache[PHIHASH_REGS];
     int mix_seq_dst_cnt = 0;
     int mix_seq_cache_cnt = 0;
-
-    bool _IS_CUDA=true;
     for (int i = 0; i < PHIHASH_REGS; i++)
     {
         mix_seq_dst[i] = i;
@@ -42,9 +42,9 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     for (int i = PHIHASH_REGS - 1; i > 0; i--)
     {
         int j;
-        j = pcg_rnd() % (i + 1);
+        j = rnd() % (i + 1);
         swap(mix_seq_dst[i], mix_seq_dst[j]);
-        j = pcg_rnd() % (i + 1);
+        j = rnd() % (i + 1);
         swap(mix_seq_cache[i], mix_seq_cache[j]);
     }
 
@@ -72,7 +72,6 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "#endif\n\n";
 
         ret << "\n";
-
     }
     else
     {
@@ -87,7 +86,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "#define ROTR32(x, n) rotate((x), (uint32_t)(32-n))\n";
         ret << "\n";
     }
-    ret << "#define max(a, b) ((a) > (b) ? (a) : (b))\n"; 
+
     ret << "#define PHIHASH_LANES           " << PHIHASH_LANES << "\n";
     ret << "#define PHIHASH_REGS            " << PHIHASH_REGS << "\n";
     ret << "#define PHIHASH_DAG_LOADS       " << PHIHASH_DAG_LOADS << "\n";
@@ -96,13 +95,12 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     ret << "#define PHIHASH_CNT_MATH        " << PHIHASH_CNT_MATH << "\n";
     ret << "\n";
 
-
     if (kern == KERNEL_CUDA)
     {
         ret << "typedef struct __align__(16) {uint32_t s[PHIHASH_DAG_LOADS];} dag_t;\n";
         ret << "\n";
         ret << "// Inner loop for phi_seed " << phi_seed << "\n";
-        ret << "__device__ __forceinline__ void PhihashLoop(const uint32_t loop,\n";
+        ret << "__device__ __forceinline__ void progPowLoop(const uint32_t loop,\n";
         ret << "        uint32_t mix[PHIHASH_REGS],\n";
         ret << "        const dag_t *g_dag,\n";
         ret << "        const uint32_t c_dag[PHIHASH_CACHE_WORDS],\n";
@@ -113,7 +111,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "typedef struct __attribute__ ((aligned (16))) {uint32_t s[PHIHASH_DAG_LOADS];} dag_t;\n";
         ret << "\n";
         ret << "// Inner loop for phi_seed " << phi_seed << "\n";
-        ret << "inline void PhihashLoop(const uint32_t loop,\n";
+        ret << "inline void progPowLoop(const uint32_t loop,\n";
         ret << "        volatile uint32_t mix_arg[PHIHASH_REGS],\n";
         ret << "        __global const dag_t *g_dag,\n";
         ret << "        __local const uint32_t c_dag[PHIHASH_CACHE_WORDS],\n";
@@ -128,7 +126,6 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
     // See https://github.com/gangnamtestnet/phihashminer/issues/16
     if (kern == KERNEL_CL)
     {
-        _IS_CUDA=false;
         ret << "uint32_t mix[PHIHASH_REGS];\n";
         ret << "for(int i=0; i<PHIHASH_REGS; i++)\n";
         ret << "    mix[i] = mix_arg[i];\n";
@@ -173,7 +170,7 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
             // lanes access random locations
             std::string src = mix_cache();
             std::string dest = mix_dst();
-            uint32_t r = pcg_rnd();
+            uint32_t r = rnd();
             ret << "// cache load " << i << "\n";
             ret << "offset = " << src << " % PHIHASH_CACHE_WORDS;\n";
             ret << "data = c_dag[offset];\n";
@@ -183,17 +180,17 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         {
             // Random Math
             // Generate 2 unique sources
-            int src_rnd = pcg_rnd() % ((PHIHASH_REGS - 1) * PHIHASH_REGS);
+            int src_rnd = rnd() % ((PHIHASH_REGS - 1) * PHIHASH_REGS);
             int src1 = src_rnd % PHIHASH_REGS; // 0 <= src1 < PHIHASH_REGS
             int src2 = src_rnd / PHIHASH_REGS; // 0 <= src2 < PHIHASH_REGS - 1
             if (src2 >= src1) ++src2; // src2 is now any reg other than src1
             std::string src1_str = "mix[" + std::to_string(src1) + "]";
             std::string src2_str = "mix[" + std::to_string(src2) + "]";
-            uint32_t r1 = pcg_rnd();
+            uint32_t r1 = rnd();
             std::string dest = mix_dst();
-            uint32_t r2 = pcg_rnd();
+            uint32_t r2 = rnd();
             ret << "// random math " << i << "\n";
-            ret << math("data", src1_str, src2_str, r1,_IS_CUDA);
+            ret << math("data", src1_str, src2_str, r1);
             ret << merge(dest, "data", r2);
         }
     }
@@ -204,11 +201,11 @@ std::string PhiHash::getKern(uint64_t phi_seed, kernel_t kern)
         ret << "if (hack_false) __threadfence_block();\n";
     else
         ret << "if (hack_false) barrier(CLK_LOCAL_MEM_FENCE);\n";
-    ret << merge("mix[0]", "data_dag.s[0]", pcg_rnd());
+    ret << merge("mix[0]", "data_dag.s[0]", rnd());
     for (int i = 1; i < PHIHASH_DAG_LOADS; i++)
     {
         std::string dest = mix_dst();
-        uint32_t    r = pcg_rnd();
+        uint32_t    r = rnd();
         ret << merge(dest, "data_dag.s["+std::to_string(i)+"]", r);
     }
     // Work around AMD OpenCL compiler bug
@@ -245,56 +242,34 @@ std::string PhiHash::merge(std::string a, std::string b, uint32_t r)
 }
 
 // Random math between two input values
-std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t r, bool _IS_CUDA)
+std::string PhiHash::math(std::string d, std::string a, std::string b, uint32_t r)
 {
-    std::ostringstream ret;
-    // printf("%d\n", r % 11);  
-
-    static const char* operations[] = {
-        " + ",  // case 0
-        " * ",  // case 1
-        " - ",  // case 2
-        "min(", // case 3
-        "max(", // case 4
-        "ROTL32(", // case 5
-        "ROTR32(", // case 6
-        " & ",  // case 7
-        " | ",  // case 8
-        " ^ "   // case 9
-    };
-
-    int op_index = r % 11;  
-    if (op_index < 3) {
-        ret << d << " = " << a << operations[op_index] << b << ";\n";
-    } else if (op_index < 5) {
-        ret << d << " = " << operations[op_index] << a << ", " << b << ");\n";
-    } else if (op_index < 7) {
-        ret << d << " = " << operations[op_index] << a << ", " << b << " & 31);\n";
-    } else if (op_index == 10) {  
-        if (_IS_CUDA){
-            ret << d << " = [&]() { "
-                << "constexpr float PHI = 0.61803398875f; "
-                << "float sum = static_cast<float>(" << a << ") + static_cast<float>(" << b << "); "
-                << "float result = tanhf(sum * PHI); "
-                << "float frac_part = result - floor(result); "
-                << "return static_cast<uint32_t>(frac_part * (1ULL << 32)); "
-                << "}();\n";
-        }else{
-            ret << d << " = "
-                << "({ "
-                << "const float PHI = 0.61803398875f; "
-                << "float sum = (float)(" << a << ") + (float)(" << b << "); "
-                << "float result = tanh(sum * PHI); "
-                << "float frac_part = result - floor(result); "
-                << "(unsigned int)(frac_part * (1u << 32)); "
-                << "});\n";
-
-        }
-    } else {
-        ret << d << " = " << a << operations[op_index] << b << ";\n";
+    switch (r % 11)
+    {
+    case 0:
+        return d + " = " + a + " + " + b + ";\n";
+    case 1:
+        return d + " = " + a + " * " + b + ";\n";
+    case 2:
+        return d + " = mul_hi(" + a + ", " + b + ");\n";
+    case 3:
+        return d + " = min(" + a + ", " + b + ");\n";
+    case 4:
+        return d + " = ROTL32(" + a + ", " + b + " % 32);\n";
+    case 5:
+        return d + " = ROTR32(" + a + ", " + b + " % 32);\n";
+    case 6:
+        return d + " = " + a + " & " + b + ";\n";
+    case 7:
+        return d + " = " + a + " | " + b + ";\n";
+    case 8:
+        return d + " = " + a + " ^ " + b + ";\n";
+    case 9:
+        return d + " = clz(" + a + ") + clz(" + b + ");\n";
+    case 10:
+        return d + " = popcount(" + a + ") + popcount(" + b + ");\n";
     }
-
-    return ret.str();
+    return "#error\n";
 }
 
 uint32_t PhiHash::fnv1a(uint32_t &h, uint32_t d)
@@ -302,40 +277,17 @@ uint32_t PhiHash::fnv1a(uint32_t &h, uint32_t d)
     return h = (h ^ d) * 0x1000193;
 }
 
-
-uint32_t PhiHash::pcg32(pcg32_t &st)
+// KISS99 is simple, fast, and passes the TestU01 suite
+// https://en.wikipedia.org/wiki/KISS_(algorithm)
+// http://www.cse.yorku.ca/~oz/marsaglia-rng.html
+uint32_t PhiHash::kiss99(kiss99_t &st)
 {
-    uint64_t oldstate = st.state;
-    st.state = oldstate * 6364136223846793005ULL + (st.inc | 1);
-    // uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
-    uint32_t xorshifted = static_cast<uint32_t>(((oldstate >> 18u) ^ oldstate) >> 27u);
-
-    uint32_t rot = oldstate >> 59u;
-    // return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
-
-    return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
-}
-void PhiHash::calculate_fast_mod_data(uint32_t divisor, uint32_t& reciprocal, uint32_t& increment, uint32_t& shift)
-{
-    if ((divisor & (divisor - 1)) == 0) {
-        reciprocal = 1;
-        increment = 0;
-        shift = 31U - clz(divisor);
-    }
-    else {
-        shift = 63U - clz(divisor);
-        const uint64_t N = 1ULL << shift;
-        const uint64_t q = N / divisor;
-        const uint64_t r = N - q * divisor;
-        if (r * 2 < divisor)
-        {
-            reciprocal = static_cast<uint32_t>(q);
-            increment = 1;
-        }
-        else
-        {
-            reciprocal = static_cast<uint32_t>(q + 1);
-            increment = 0;
-        }
-    }
+    st.z = 36969 * (st.z & 65535) + (st.z >> 16);
+    st.w = 18000 * (st.w & 65535) + (st.w >> 16);
+    uint32_t MWC = ((st.z << 16) + st.w);
+    st.jsr ^= (st.jsr << 17);
+    st.jsr ^= (st.jsr >> 13);
+    st.jsr ^= (st.jsr << 5);
+    st.jcong = 69069 * st.jcong + 1234567;
+    return ((MWC^st.jcong) + st.jsr);
 }

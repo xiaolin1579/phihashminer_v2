@@ -33,7 +33,7 @@ __constant const uint32_t keccakf_rndc[24] = {0x00000001, 0x00008082, 0x0000808a
     0x8000808b, 0x0000008b, 0x00008089, 0x00008003, 0x00008002, 0x00000080, 0x0000800a, 0x8000000a,
     0x80008081, 0x00008080, 0x80000001, 0x80008008};
 
-__constant const uint32_t ravencoin_rndc[15] = {
+__constant const uint32_t phicoin_rndc[15] = {
         0x00000049, // I
         0x0000004C, // L
         0x0000004F, // O
@@ -50,7 +50,6 @@ __constant const uint32_t ravencoin_rndc[15] = {
         0x00000049, // I
         0x0000004E, // N
 };
-// __generic uint32_t state[25];
 
 // Implementation of the Keccakf transformation with a width of 800
 void keccak_f800_round(uint32_t st[25], const int r)
@@ -98,7 +97,7 @@ void keccak_f800_round(uint32_t st[25], const int r)
 // Keccak - implemented as a variant of SHAKE
 // The width is 800, with a bitrate of 576, a capacity of 224, and no padding
 // Only need 64 bits of output for mining
-uint64_t keccak_f800(__private uint32_t* st)
+uint64_t keccak_f800(uint32_t* st)
 {
     // Complete all 22 rounds as a separate impl to
     // evaluate only first 8 words is wasteful of regsters
@@ -109,35 +108,41 @@ uint64_t keccak_f800(__private uint32_t* st)
 
 #define fnv1a(h, d) (h = (h ^ d) * FNV_PRIME)
 
-
 typedef struct
 {
-    uint64_t state;
-    uint64_t inc;
-} pcg32_t;
+    uint32_t z, w, jsr, jcong;
+} kiss99_t;
 
-uint32_t pcg32(pcg32_t* st)
+// KISS99 is simple, fast, and passes the TestU01 suite
+// https://en.wikipedia.org/wiki/KISS_(algorithm)
+// http://www.cse.yorku.ca/~oz/marsaglia-rng.html
+uint32_t kiss99(kiss99_t* st)
 {
-    uint64_t oldstate = st->state;
-    st->state = oldstate * 6364136223846793005ULL + (st->inc | 1);
-    uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
-    uint32_t rot = oldstate >> 59u;
-    // return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
-    return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
+    st->z = 36969 * (st->z & 65535) + (st->z >> 16);
+    st->w = 18000 * (st->w & 65535) + (st->w >> 16);
+    uint32_t MWC = ((st->z << 16) + st->w);
+    st->jsr ^= (st->jsr << 17);
+    st->jsr ^= (st->jsr >> 13);
+    st->jsr ^= (st->jsr << 5);
+    st->jcong = 69069 * st->jcong + 1234567;
+    return ((MWC ^ st->jcong) + st->jsr);
 }
-
 
 void fill_mix(local uint32_t* seed, uint32_t lane_id, uint32_t* mix)
 {
+    // Use FNV to expand the per-warp seed to per-lane
+    // Use KISS to expand the per-lane seed to fill mix
     uint32_t fnv_hash = FNV_OFFSET_BASIS;
-    pcg32_t st;
-    st.state = fnv1a(fnv_hash, seed[0]);
-    st.inc = fnv1a(fnv_hash, seed[1]) | 1;  
-
-    #pragma unroll
+    kiss99_t st;
+    st.z = fnv1a(fnv_hash, seed[0]);
+    st.w = fnv1a(fnv_hash, seed[1]);
+    st.jsr = fnv1a(fnv_hash, lane_id);
+    st.jcong = fnv1a(fnv_hash, lane_id);
+#pragma unroll
     for (int i = 0; i < PHIHASH_REGS; i++)
-        mix[i] = pcg32(&st);
+        mix[i] = kiss99(&st);
 }
+
 typedef struct
 {
     uint32_t uint32s[PHIHASH_LANES];
@@ -213,7 +218,7 @@ uint32_t state2[8];
 
     // 3rd apply ravencoin input constraints
     for (int i = 10; i < 25; i++)
-        state[i] = ravencoin_rndc[i-10];
+        state[i] = phicoin_rndc[i-10];
 
     // Run intial keccak round
     keccak_f800(state);
@@ -278,7 +283,7 @@ uint32_t state2[8];
 
         // 3rd apply ravencoin input constraints
         for (int i = 16; i < 25; i++)
-            state[i] = ravencoin_rndc[i - 16];
+            state[i] = phicoin_rndc[i - 16];
 
         // Run keccak loop
         keccak_f800(state);
@@ -318,7 +323,7 @@ uint32_t state2[8];
 #define ETHASH_DATASET_PARENTS 512
 #define NODE_WORDS (64 / 4)
 
-//#define FNV_PRIME 0x01000193U
+#define FNV_PRIME 0x01000193
 
 __constant uint2 const Keccak_f1600_RC[24] = {
     (uint2)(0x00000001, 0x00000000),

@@ -30,7 +30,7 @@ __device__ __constant__ const uint32_t keccakf_rndc[24] = {
     0x0000800a, 0x8000000a, 0x80008081, 0x00008080, 0x80000001, 0x80008008
 };
 
-__device__ __constant__ const uint32_t ravencoin_rndc[15] = {
+__device__ __constant__ const uint32_t phicoin_rndc[15] = {
 
         0x00000049, // I
         0x0000004C, // L
@@ -156,48 +156,24 @@ __device__ __forceinline__ uint32_t kiss99(kiss99_t &st)
     st.jcong = 69069 * st.jcong + 1234567;
     return ((MWC^st.jcong) + st.jsr);
 }
-typedef struct
-{
-    uint64_t state;
-    uint64_t inc;
-} pcg32_t;
 
-__device__ __forceinline__ uint32_t pcg32(pcg32_t &st)
-{
-    uint64_t oldstate = st.state;
-    st.state = oldstate * 6364136223846793005ULL + (st.inc | 1);
-    uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
-    uint32_t rot = oldstate >> 59u;
-    // return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
-    return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
-}
-// __device__ __forceinline__ void fill_mix(uint32_t* hash_seed, uint32_t lane_id, uint32_t* mix)
-// {
-//     // Use FNV to expand the per-warp seed to per-lane
-//     // Use KISS to expand the per-lane seed to fill mix
-//     uint32_t fnv_hash = FNV_OFFSET_BASIS;
-//     kiss99_t st;
-//     st.z = fnv1a(fnv_hash, hash_seed[0]);
-//     st.w = fnv1a(fnv_hash, hash_seed[1]);
-//     st.jsr = fnv1a(fnv_hash, lane_id);
-//     st.jcong = fnv1a(fnv_hash, lane_id);
-//     #pragma unroll
-//     for (int i = 0; i < PHIHASH_REGS; i++)
-//         mix[i] = kiss99(st);
-// }
 __device__ __forceinline__ void fill_mix(uint32_t* hash_seed, uint32_t lane_id, uint32_t* mix)
 {
+    // Use FNV to expand the per-warp seed to per-lane
+    // Use KISS to expand the per-lane seed to fill mix
     uint32_t fnv_hash = FNV_OFFSET_BASIS;
-    pcg32_t st;
-    st.state = fnv1a(fnv_hash, hash_seed[0]);
-    st.inc = fnv1a(fnv_hash, hash_seed[1]) | 1;  
-
+    kiss99_t st;
+    st.z = fnv1a(fnv_hash, hash_seed[0]);
+    st.w = fnv1a(fnv_hash, hash_seed[1]);
+    st.jsr = fnv1a(fnv_hash, lane_id);
+    st.jcong = fnv1a(fnv_hash, lane_id);
     #pragma unroll
     for (int i = 0; i < PHIHASH_REGS; i++)
-        mix[i] = pcg32(st);
+        mix[i] = kiss99(st);
 }
+
 __global__ void 
-phihash_search(
+progpow_search(
     uint64_t start_nonce,
     const hash32_t header,
     const uint64_t target,
@@ -244,7 +220,7 @@ phihash_search(
 
         // 3rd apply ravencoin input constraints
         for (int i = 10; i < 25; i++)
-            state[i] = ravencoin_rndc[i-10];
+            state[i] = phicoin_rndc[i-10];
 
         // Run intial keccak round
         keccak_f800(state);
@@ -308,7 +284,7 @@ phihash_search(
 
         // 3rd apply ravencoin input constraints
         for (int i = 16; i < 25; i++)
-            state[i] = ravencoin_rndc[i - 16];
+            state[i] = phicoin_rndc[i - 16];
 
         // Run keccak loop
         keccak_f800(state);
